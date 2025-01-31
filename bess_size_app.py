@@ -33,7 +33,7 @@ def get_consumption_profile():
 # Get battery and grid parameters from user
 def get_user_parameters():
     grid_threshold = st.number_input("Enter your grid import threshold in kW:", min_value=0.0, step=0.1)
-    battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=0.0, max_value=100.0,
+    battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
                                          step=0.1) / 100
     c_rating = st.number_input("Enter your battery C-rating:", min_value=0.0, step=0.1)
     min_soc = st.number_input("Enter your minimum state of charge (in %):", min_value=0.0, max_value=100.0,
@@ -80,6 +80,25 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_efficiency, 
         net_grid_load[hour] = consumption[hour] - discharge_schedule[hour] + charge_schedule[hour]
 
     return charge_schedule, discharge_schedule, net_grid_load
+
+# Function to compare different BESS sizes
+def compare_bess_sizes(consumption, spot_prices, grid_threshold, battery_efficiency, min_soc, max_soc):
+    bess_sizes = [0, 500, 1000, 1500, 2000]  # Different BESS capacities (kWh)
+    results = {}
+
+    for size in bess_sizes:
+        charge_schedule, discharge_schedule, net_grid_load = optimize_bess(
+            consumption, spot_prices, grid_threshold, battery_efficiency, min_soc, max_soc, size
+        )
+        initial_cost, optimized_cost, savings = calculate_savings(consumption, spot_prices, net_grid_load)
+        results[size] = {"Initial Cost (NOK)": initial_cost,
+                         "Optimized Cost (NOK)": optimized_cost,
+                         "Savings (NOK)": savings}
+
+    # Determine the best size with max savings
+    best_size = max(results, key=lambda x: results[x]["Savings (NOK)"])
+
+    return results, best_size
 
 
 # Calculate cost savings
@@ -134,7 +153,7 @@ def main():
         return
 
     # User inputs
-    st.title("Battery Energy Storage System (BESS) Optimization")
+    st.title("BESS Size Calculator")
     consumption = get_consumption_profile()
     grid_threshold, battery_efficiency, c_rating, min_soc, max_soc = get_user_parameters()
 
@@ -149,6 +168,24 @@ def main():
     st.write(f"🔹 Initial Cost (without BESS optimization): {initial_cost:.2f} NOK")
     st.write(f"🔹 Optimized Cost (with BESS optimization): {optimized_cost:.2f} NOK")
     st.write(f"🔹 Total Savings: {savings:.2f} NOK")
+
+    # Compare different BESS sizes
+    bess_comparison, best_size = compare_bess_sizes(consumption, spot_prices, grid_threshold, battery_efficiency,
+                                                    min_soc, max_soc)
+
+    # Display results in a table
+    st.subheader("💡 Comparison of Different BESS Sizes")
+    st.write("The table below compares cost savings for different battery sizes.")
+
+    # Convert results to a DataFrame for better readability
+    import pandas as pd
+    df_comparison = pd.DataFrame.from_dict(bess_comparison, orient='index')
+    df_comparison.index.name = "BESS Size (kWh)"
+    st.table(df_comparison)
+
+    # Highlight the best battery size
+    st.success(
+        f"✅ Recommended Battery Size: **{best_size} kWh** (Maximum Savings: {bess_comparison[best_size]['Savings (NOK)']:.2f} NOK)")
 
     # Plot results
     plot_results(consumption, spot_prices, charge_schedule, discharge_schedule, net_grid_load)
