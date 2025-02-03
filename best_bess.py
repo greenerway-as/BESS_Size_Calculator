@@ -45,8 +45,13 @@ def get_user_parameters():
     return grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc
 
 
-def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
-                  min_soc, max_soc):
+# Determine battery size needed for peak shaving
+def determine_battery_size(consumption, grid_threshold):
+    peak_exceedances = [max(0, consumption[hour] - grid_threshold) for hour in range(24)]
+    return sum(peak_exceedances)
+
+
+def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc):
     if battery_capacity == 0:
         return [0] * 24, [0] * 24, consumption
 
@@ -61,41 +66,77 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
             discharge_schedule[hour] = discharge_power
             soc -= discharge_power / battery_efficiency
             net_grid_load[hour] -= discharge_power
+
+            # Ensure net grid load does not exceed threshold
             net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
 
-    return charge_schedule, discharge_schedule, net_grid_load
-
-def compute_peak_shaving_savings(consumption, grid_threshold):
-    highest_hourly_consumption = max(consumption)
-    peak_shaving = max(0, highest_hourly_consumption - grid_threshold)
-    total_savings = peak_shaving * 104 * 6
-    return peak_shaving, total_savings
-
-def price_arbitrage_schedule(spot_prices, battery_power, battery_capacity, battery_efficiency):
-    soc = 0  # Start at 0% SoC
-    charge_schedule = [0] * 24
-    discharge_schedule = [0] * 24
-    arbitrage_savings = 0
-
+    # Second pass: Arbitrage while maintaining grid import and preventing negative net load
     lowest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x])[:3]
     highest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x], reverse=True)[:3]
 
     for hour in lowest_prices_indices:
-        if soc < battery_capacity:
-            charge_power = min(battery_power, (battery_capacity - soc) / battery_efficiency)
-            charge_schedule[hour] = charge_power
-            soc += charge_power * battery_efficiency
+        if soc < max_soc * battery_capacity:
+            charge_power = min(battery_power, (max_soc * battery_capacity - soc) / battery_efficiency)
+            if net_grid_load[hour] + charge_power <= grid_threshold:
+                charge_schedule[hour] = charge_power
+                soc += charge_power * battery_efficiency
+                net_grid_load[hour] += charge_power
 
     for hour in highest_prices_indices:
-        if soc > 0:
+        if soc > min_soc * battery_capacity:
             discharge_power = min(battery_power, soc * battery_efficiency)
-            discharge_schedule[hour] = discharge_power
-            soc -= discharge_power / battery_efficiency
+            potential_net_load = net_grid_load[hour] - discharge_power
+            if potential_net_load >= 0:
+                discharge_schedule[hour] += discharge_power
+                soc -= discharge_power / battery_efficiency
+                net_grid_load[hour] -= discharge_power
 
+    # Final pass: Strictly enforce grid threshold and non-negative net load
     for hour in range(24):
-        arbitrage_savings += discharge_schedule[hour] * spot_prices[hour] - charge_schedule[hour] * spot_prices[hour]
+        if net_grid_load[hour] > grid_threshold:
+            excess = net_grid_load[hour] - grid_threshold
+            discharge_power = min(excess, battery_power, soc * battery_efficiency)
+            discharge_schedule[hour] += discharge_power
+            soc -= discharge_power / battery_efficiency
+            net_grid_load[hour] -= discharge_power
+            net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
 
-    return charge_schedule, discharge_schedule, arbitrage_savings
+        if net_grid_load[hour] < 0:
+            charge_power = min(-net_grid_load[hour], battery_power, (max_soc * battery_capacity - soc) / battery_efficiency)
+            charge_schedule[hour] += charge_power
+            soc += charge_power * battery_efficiency
+            net_grid_load[hour] += charge_power
+            net_grid_load[hour] = max(net_grid_load[hour], 0)
+
+    return charge_schedule, discharge_schedule, net_grid_load
+
+
+# Function to compare different BESS sizes
+def compare_bess_sizes(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
+                       min_soc, max_soc):
+    bess_sizes = [0, 500, 1000, 1500, 2000]
+    results = {}
+
+    for size in bess_sizes:
+        charge_schedule, discharge_schedule, net_grid_load = optimize_bess(
+            consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc,
+            max_soc
+        )
+        initial_cost, optimized_cost, savings = calculate_savings(consumption, spot_prices, net_grid_load)
+        results[size] = {"Initial Cost (NOK)": initial_cost,
+                         "Optimized Cost (NOK)": optimized_cost,
+                         "Savings (NOK)": savings}
+
+    best_size = max(results, key=lambda x: results[x]["Savings (NOK)"])
+    return results, best_size
+
+
+# Calculate cost savings
+def calculate_savings(consumption, spot_prices, net_grid_load):
+    initial_cost = sum([consumption[hour] * spot_prices[hour] for hour in range(24)])
+    optimized_cost = sum([net_grid_load[hour] * spot_prices[hour] for hour in range(24)])
+    savings = initial_cost - optimized_cost
+    return initial_cost, optimized_cost, savings
 
 
 def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
@@ -107,6 +148,13 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     ax[0].bar(hours, consumption, label='Original Consumption (kWh)', color='blue', alpha=0.6)
     ax[0].bar(hours, net_grid_load, label='Net Grid Load after BESS (kWh)', color='red', alpha=0.6)
     ax[0].axhline(y=grid_threshold, color='green', linestyle='--', label='Grid Threshold (kW)')
+
+    # Highlight where net load exceeds the grid threshold
+    for hour in range(24):
+        if net_grid_load[hour] > grid_threshold:
+            ax[0].annotate('Exceeds Threshold', xy=(hour, net_grid_load[hour]),
+                           xytext=(hour, net_grid_load[hour] + 0.5),
+                           arrowprops=dict(facecolor='black', shrink=0.05), fontsize=8, color='darkred')
 
     ax[0].set_title('Energy Consumption & Net Grid Load')
     ax[0].set_xlabel('Hour')
@@ -155,7 +203,7 @@ def main():
             df_selected["Hour"] = df_selected["Fra"].dt.hour
             hourly_consumption = df_selected.groupby("Hour")["KWH 15 Forbruk"].apply(
                 lambda x: sum(map(float, x.str.replace(",", ".")))).tolist()
-            hourly_consumption = [f"{value:.2f}" for value in hourly_consumption]
+            hourly_consumption = [round(value, 2) for value in hourly_consumption]
             st.write(f"Data for {date_choice} loaded successfully!")
             st.write("Hourly consumption:")
             st.write(hourly_consumption)
@@ -167,31 +215,45 @@ def main():
         st.error("Consumption data is required to proceed.")
         return
 
-
     grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters()
 
-    # Optimize BESS for peak shaving
+    battery_capacity = determine_battery_size(consumption, grid_threshold)
     charge_schedule, discharge_schedule, net_grid_load = optimize_bess(
         consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc
     )
 
-    peak_shaving, total_savings = compute_peak_shaving_savings(consumption, grid_threshold)
+    initial_cost, optimized_cost, savings = calculate_savings(consumption, spot_prices, net_grid_load)
+    st.write(f"🔹 Initial Cost (without BESS optimization): {initial_cost:.2f} NOK")
+    st.write(f"🔹 Optimized Cost (with BESS optimization): {optimized_cost:.2f} NOK")
+    st.write(f"🔹 Total Savings: {savings:.2f} NOK")
 
-    st.subheader("Peak Shaving Analysis")
-    st.write(f"Highest Hourly Consumption: {max(consumption):.2f} kWh")
-    st.write(f"Peak Shaving for the Day: {peak_shaving:.2f} kWh")
-    st.write(f"Total Savings from Peak Shaving: {total_savings:.2f} NOK")
+    bess_comparison, best_size = compare_bess_sizes(consumption, spot_prices, grid_threshold, battery_power,
+                                                    battery_capacity, battery_efficiency, min_soc, max_soc)
 
-    charge_schedule, discharge_schedule, arbitrage_savings = price_arbitrage_schedule(
-        spot_prices, battery_power, battery_capacity, battery_efficiency
-    )
+    st.subheader("Comparison of Different BESS Sizes")
+    st.write("The table below compares cost savings for different battery sizes.")
+    df_comparison = pd.DataFrame.from_dict(bess_comparison, orient='index')
+    df_comparison.index.name = "BESS Size (kWh)"
+    st.table(df_comparison)
 
-    st.subheader("Price Arbitrage Optimization")
-    st.write(
-        "**Assumption: The battery starts at 0% SoC at the beginning of the day and can discharge to 0% at the end.**")
-    st.write(f"Total Savings from Price Arbitrage: {arbitrage_savings:.2f} NOK")
-    st.write(f"Charging schedule: {charge_schedule}")
-    st.write(f"Discharging schedule: {discharge_schedule}")
+    st.success(
+        f"Recommended Battery Size: **{best_size} kWh** (Maximum Savings: {bess_comparison[best_size]['Savings (NOK)']:.2f} NOK)")
+
+    st.subheader("Suggested BESS Charge and Discharge Schedule")
+    schedule = ["Idle"] * 24
+
+    for hour in range(24):
+        if charge_schedule[hour] > 0:
+            schedule[hour] = "Charge"
+        elif discharge_schedule[hour] > 0:
+            schedule[hour] = "Discharge"
+
+    st.write("BESS Suggested Schedule (Hour: Action)")
+    for hour in range(24):
+        if schedule[hour] != "Idle":
+            st.write(f"{hour}:00 - {schedule[hour]}")
+
+    plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
 
 
 if __name__ == "__main__":
