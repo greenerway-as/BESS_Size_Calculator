@@ -2,11 +2,9 @@ import streamlit as st
 import requests
 import datetime
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 
 
-# Fetch spot prices from hvakosterstrom API
 def fetch_spot_prices(date, region):
     year, month, day = date.strftime('%Y'), date.strftime('%m'), date.strftime('%d')
     url = f'https://www.hvakosterstrommen.no/api/v1/prices/{year}/{month}-{day}_{region}.json'
@@ -21,7 +19,6 @@ def fetch_spot_prices(date, region):
         return None
 
 
-# Get consumption profile from user
 def get_consumption_profile():
     consumption = []
     st.write("Enter your 24-hour consumption profile in kWh (one value per hour):")
@@ -31,7 +28,6 @@ def get_consumption_profile():
     return consumption
 
 
-# Get battery and grid parameters from user
 def get_user_parameters():
     grid_threshold = st.number_input("Enter your grid import threshold in kW:", min_value=0.0, step=0.1)
     battery_power = st.number_input("Enter your battery power (in kW):", min_value=0.0, step=0.1)
@@ -53,7 +49,7 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
     soc = max_soc * battery_capacity
     charge_schedule, discharge_schedule, net_grid_load = [0] * 24, [0] * 24, consumption[:]
 
-    # First pass: Prioritize peak shaving
+    # Prioritize peak shaving
     for hour in range(24):
         if net_grid_load[hour] > grid_threshold:
             excess_load = net_grid_load[hour] - grid_threshold
@@ -72,7 +68,7 @@ def compute_peak_shaving_savings(consumption, grid_threshold):
     return peak_shaving, total_savings
 
 def price_arbitrage_schedule(spot_prices, battery_power, battery_capacity, battery_efficiency):
-    soc = 0  # Start at 0% SoC
+    soc = 0
     charge_schedule = [0] * 24
     discharge_schedule = [0] * 24
     arbitrage_savings = 0
@@ -88,7 +84,7 @@ def price_arbitrage_schedule(spot_prices, battery_power, battery_capacity, batte
 
     for hour in highest_prices_indices:
         if soc > 0:
-            discharge_power = min(battery_power, soc * battery_efficiency)
+            discharge_power = round(min(battery_power, soc * battery_efficiency),2)
             discharge_schedule[hour] = discharge_power
             soc -= discharge_power / battery_efficiency
 
@@ -155,7 +151,7 @@ def main():
             df_selected["Hour"] = df_selected["Fra"].dt.hour
             hourly_consumption = df_selected.groupby("Hour")["KWH 15 Forbruk"].apply(
                 lambda x: sum(map(float, x.str.replace(",", ".")))).tolist()
-            hourly_consumption = [f"{value:.2f}" for value in hourly_consumption]
+            hourly_consumption = [round(value, 2) for value in hourly_consumption]
             st.write(f"Data for {date_choice} loaded successfully!")
             st.write("Hourly consumption:")
             st.write(hourly_consumption)
@@ -167,7 +163,6 @@ def main():
         st.error("Consumption data is required to proceed.")
         return
 
-
     grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters()
 
     # Optimize BESS for peak shaving
@@ -175,6 +170,7 @@ def main():
         consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc
     )
 
+    # Compute peak shaving savings
     peak_shaving, total_savings = compute_peak_shaving_savings(consumption, grid_threshold)
 
     st.subheader("Peak Shaving Analysis")
@@ -182,6 +178,7 @@ def main():
     st.write(f"Peak Shaving for the Day: {peak_shaving:.2f} kWh")
     st.write(f"Total Savings from Peak Shaving: {total_savings:.2f} NOK")
 
+    # Price Arbitrage Optimization
     charge_schedule, discharge_schedule, arbitrage_savings = price_arbitrage_schedule(
         spot_prices, battery_power, battery_capacity, battery_efficiency
     )
@@ -193,6 +190,8 @@ def main():
     st.write(f"Charging schedule: {charge_schedule}")
     st.write(f"Discharging schedule: {discharge_schedule}")
 
+    plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
 
 if __name__ == "__main__":
     main()
+
