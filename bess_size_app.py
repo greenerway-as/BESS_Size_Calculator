@@ -34,9 +34,9 @@ def get_user_parameters():
     battery_capacity = st.number_input("Enter your battery capacity (in kWh):", min_value=0.0, step=0.1)
     battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
                                          step=0.1) / 100
-    min_soc = st.number_input("Enter your minimum state of charge (in %):", min_value=0.0, max_value=100.0,
+    min_soc = st.number_input("Enter your minimum state of charge (in %):", min_value=10.0, max_value=100.0,
                               step=0.1) / 100
-    max_soc = st.number_input("Enter your maximum state of charge (in %):", min_value=0.0, max_value=100.0,
+    max_soc = st.number_input("Enter your maximum state of charge (in %):", min_value=0.0, max_value=90.0,
                               step=0.1) / 100
     return grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc
 
