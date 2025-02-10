@@ -27,15 +27,15 @@ def get_consumption_profile():
 def get_user_parameters():
     grid_threshold = st.number_input("Enter your grid import threshold in kW:", min_value=0.0, step=0.1)
 
-    # Battery Power dropdown
+
     battery_power_options = list(range(100, 2001, 100))
     battery_power = st.selectbox("Select Battery Power (kW):", battery_power_options)
 
-    # C-rate dropdown
+
     c_rate_options = [0.5, 1.0, 1.5, 2.0]
     c_rate = st.selectbox("Select C-Rate:", c_rate_options)
 
-    # Calculate Battery Capacity
+
     battery_capacity = 21.5 * battery_power / c_rate
     st.write(f"Battery Capacity: {battery_capacity:.2f} kWh")
 
@@ -52,16 +52,15 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
     if battery_capacity == 0:
         return [0] * 24, [0] * 24, consumption, 0
 
-    # Initialize SOC
+
     if initial_soc is None:
-        soc = max_soc * battery_capacity  # Use max_soc if initial_soc is not provided
+        soc = max_soc * battery_capacity
     else:
         soc = initial_soc * battery_capacity
 
     charge_schedule, discharge_schedule, net_grid_load = [0] * 24, [0] * 24, consumption[:]
     arbitrage_savings = 0
 
-    # Find 3 lowest and 3 highest price hours
     lowest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x])[:3]
     highest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x], reverse=True)[:3]
 
@@ -75,7 +74,7 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
             net_grid_load[hour] -= discharge_power
             net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
 
-        # 2. Price Arbitrage (Charging during 3 lowest price hours)
+
         if hour in lowest_prices_indices and soc < max_soc * battery_capacity:
             available_import = grid_threshold - net_grid_load[hour]
             if available_import > 0:
@@ -86,7 +85,7 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
                 net_grid_load[hour] += charge_power
                 net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
 
-        # 3. Price Arbitrage (Discharging during 3 highest price hours)
+
         if hour in highest_prices_indices and soc > min_soc * battery_capacity:
             discharge_power = min(battery_power, soc * battery_efficiency, net_grid_load[hour])
             discharge_schedule[hour] += discharge_power
@@ -108,10 +107,8 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     hours = range(24)
 
     fig, ax = plt.subplots(2, 1, figsize=(12, 10))
-
-    # Plot 1: Energy Consumption & Net Grid Load
     ax[0].bar(hours, consumption, label='Original Consumption (kWh)', color='blue', alpha=0.6)
-    ax[0].bar(hours, net_grid_load, label='Net Grid Load after BESS (kWh)', color='red', alpha=0.6)
+    ax[0].bar(hours, net_grid_load, label='Net Grid Load after using BESS (kWh)', color='red', alpha=0.6)
     ax[0].axhline(y=grid_threshold, color='green', linestyle='--', label='Grid Threshold (kW)')
 
     ax[0].set_title('Energy Consumption & Net Grid Load')
@@ -119,7 +116,7 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     ax[0].set_ylabel('Energy (kWh)')
     ax[0].legend()
 
-    # Plot 2: Spot Prices
+
     ax[1].plot(hours, spot_prices, label='Spot Price (NOK/kWh)', color='orange')
     ax[1].set_title('Nordic Spot Prices (NO1)')
     ax[1].set_xlabel('Hour')
@@ -160,11 +157,11 @@ def main():
 
     st.title("BESS Size Calculator")
 
-    # Move user inputs to the sidebar
+
     st.sidebar.header("User Inputs")
     data_source = st.sidebar.radio("Choose data entry method:", ("Manual Entry", "Upload CSV"))
 
-    consumption = []  # Initialize consumption here
+    consumption = []
 
     if data_source == "Manual Entry":
         consumption = get_consumption_profile()
@@ -173,7 +170,7 @@ def main():
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file, sep=";", encoding="utf-8-sig", parse_dates=["Fra"], dayfirst=True)
-                df.loc[:, "Hour"] = df["Fra"].dt.hour  # Fixing SettingWithCopyWarning
+                df.loc[:, "Hour"] = df["Fra"].dt.hour
                 df['Date'] = df['Fra'].dt.date
                 unique_dates = df['Date'].unique()
                 date_choice = st.sidebar.selectbox("Select the date to analyze", unique_dates)
@@ -188,7 +185,7 @@ def main():
                 consumption = hourly_consumption
             except Exception as e:
                 st.error(f"Error processing the uploaded CSV file: {e}")
-                consumption = [] # Ensure consumption is empty in case of an error
+                consumption = []
         else:
             st.warning("Please upload a CSV file to proceed.")
 
@@ -198,32 +195,28 @@ def main():
 
     grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters()
 
-    # Site ID input
     site_id = st.sidebar.text_input("Enter Site ID:")
     api_url = "https://ems.greenerway.services/api/v1/sites/{site_id}/measurements/realtime"
     api_username = "batteri"
     api_password = "batteri"
 
-    # Fetch initial battery SOC from API
-    initial_soc = None  # Initialize initial_soc to None
+    initial_soc = None
     if site_id:
         fetched_soc = fetch_battery_soc(site_id, api_url, api_username, api_password)
         if fetched_soc is not None:
-            initial_soc = fetched_soc / 100  # Convert percentage to ratio
+            initial_soc = fetched_soc / 100
             st.write(f"Fetched initial Battery SOC from API: {initial_soc:.2f}")
         else:
             st.warning("Failed to fetch initial Battery SOC from API. Using default max_soc.")
-            initial_soc = max_soc  # Use default max_soc if API fetch fails
+            initial_soc = max_soc
     else:
-        initial_soc = max_soc  # Use default max_soc if no site ID is provided
+        initial_soc = max_soc
 
-    # Optimize BESS
     charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings = optimize_bess(
         consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc,
         max_soc, initial_soc
     )
 
-    # Compute peak shaving savings
     peak_shaving, total_savings = compute_peak_shaving_savings(consumption, grid_threshold)
 
     st.subheader("Peak Shaving Analysis")
