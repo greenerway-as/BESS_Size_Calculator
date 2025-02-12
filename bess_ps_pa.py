@@ -33,10 +33,13 @@ def get_user_parameters():
     battery_power_options = list(range(100, 2001, 100))
     battery_power = st.selectbox("Select Battery Power (kW):", battery_power_options)
 
-    c_rate_options = [0.5, 1.0, 1.5, 2.0]
+    c_rate_options = [0.5, 1.0]
     c_rate = st.selectbox("Select C-Rate:", c_rate_options)
 
-    battery_capacity = (215 * battery_power) / (c_rate * 100)
+    if c_rate == 1:
+        battery_capacity = battery_power
+    else:
+        battery_capacity = 2.15 * battery_power
     st.write(f"Battery Capacity: {battery_capacity:.2f} kWh")
 
     battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
@@ -270,8 +273,8 @@ def main():
 
     st.subheader("Price Arbitrage Optimization")
     st.write(f"Total Savings from Price Arbitrage: {arbitrage_savings:.2f} NOK")
-    st.write(f"Charging schedule: {charge_schedule}")
-    st.write(f"Discharging schedule: {discharge_schedule}")
+    st.write(f"Charging schedule: {[f'{value:.2f}' for value in charge_schedule]}")
+    st.write(f"Discharging schedule: {[f'{value:.2f}' for value in discharge_schedule]}")
 
     plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
 
