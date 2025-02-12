@@ -27,11 +27,24 @@ def get_consumption_profile():
     return consumption
 
 
-def get_user_parameters():
-    grid_threshold = st.number_input("Enter your grid import threshold in kW:", min_value=0.0, step=0.1)
-
+def get_user_parameters(highest_hourly_consumption):
     battery_power_options = list(range(100, 2001, 100))
     battery_power = st.selectbox("Select Battery Power (kW):", battery_power_options)
+
+    min_grid_threshold = highest_hourly_consumption - battery_power
+    if min_grid_threshold < 0:
+        min_grid_threshold = 0
+
+    grid_threshold = st.number_input(
+        "Enter your grid import threshold in kW:",
+        min_value=min_grid_threshold,  # Enforce the minimum value
+        step=0.1,
+        value=min_grid_threshold  # Suggest the min_grid_threshold as default
+    )
+
+    if grid_threshold < min_grid_threshold:
+        st.error(f"Minimum grid threshold should be {min_grid_threshold:.2f} kW (Highest Hourly Consumption - Battery Power).")
+        grid_threshold = min_grid_threshold
 
     c_rate_options = [0.5, 1.0]
     c_rate = st.selectbox("Select C-Rate:", c_rate_options)
@@ -110,9 +123,9 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     hours = range(24)
 
     fig, ax = plt.subplots(2, 1, figsize=(12, 10))
-    ax[0].bar(hours, consumption, label='Original Consumption before using BESS(kWh)', color='blue', alpha=0.6)
-    ax[0].bar(hours, net_grid_load, label='Net Grid Load after using BESS (kWh)', color='green', alpha=0.6)
-    ax[0].axhline(y=grid_threshold, color='red', linestyle='--', label='Grid Threshold (kW)')
+    ax[0].bar(hours, consumption, label='Original Consumption (kWh)', color='blue', alpha=0.6)
+    ax[0].bar(hours, net_grid_load, label='Net Grid Load after using BESS (kWh)', color='red', alpha=0.6)
+    ax[0].axhline(y=grid_threshold, color='green', linestyle='--', label='Grid Threshold (kW)')
 
     ax[0].set_title('Energy Consumption & Net Grid Load')
     ax[0].set_xlabel('Hour')
@@ -169,6 +182,7 @@ def main():
     end_date = st.sidebar.date_input("End Date for Monthly Data", today)
 
     monthly_hourly_consumption = {}
+    average_top_3_consumption = 0  # Initialize it here
 
     if data_source == "Manual Entry":
         consumption = get_consumption_profile()
@@ -219,11 +233,11 @@ def main():
                 # Use the date with the highest hourly consumption
                 date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
-                grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
-                    'KWH 15 Forbruk'].sum().tolist()
+                    grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
+                        'KWH 15 Forbruk'].sum().tolist()
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
 
-                st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded!")
+                st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
                 st.write("Hourly consumption:")
                 st.write(consumption)
                 average_top_3_consumption = sum(x[2] for x in top_3_consumption) / len(
@@ -239,7 +253,10 @@ def main():
         st.error("Consumption data is required to proceed.")
         return
 
-    grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters()
+    # Calculate highest hourly consumption
+    highest_hourly_consumption = max(consumption)
+
+    grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters(highest_hourly_consumption)
 
     site_id = st.sidebar.text_input("Enter Site ID:")
     api_url = "https://ems.greenerway.services/api/v1/sites/{site_id}/measurements/realtime"
@@ -266,10 +283,10 @@ def main():
     peak_shaving, total_savings = compute_peak_shaving_savings(consumption, grid_threshold)
 
     st.subheader("Peak Shaving Analysis")
-    st.write(f"Highest Hourly Consumption: {max(consumption):.2f} kWh")
+    st.write(f"Highest Hourly Consumption: {highest_hourly_consumption:.2f} kWh")
     st.write(f"Average of Top 3 Hours with Highest Consumptions: {average_top_3_consumption:.2f} kWh")
-    st.write(f"Peak Shaving for the Day: {peak_shaving:.2f} kWh")
-    st.write(f"Total Savings from Peak Shaving: {total_savings:.2f} NOK")
+    st.write(f"Peak Shaving considering the Day with highest hourly consumption: {peak_shaving:.2f} kWh")
+    st.write(f"Total Savings from Peak Shaving for 6 months(winter): {total_savings:.2f} NOK")
 
     st.subheader("Price Arbitrage Optimization")
     st.write(f"Total Savings from Price Arbitrage: {arbitrage_savings:.2f} NOK")
