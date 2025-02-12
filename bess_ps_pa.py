@@ -112,7 +112,7 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     fig, ax = plt.subplots(2, 1, figsize=(12, 10))
     ax[0].bar(hours, consumption, label='Original Consumption before using BESS(kWh)', color='blue', alpha=0.6)
     ax[0].bar(hours, net_grid_load, label='Net Grid Load after using BESS (kWh)', color='green', alpha=0.6)
-    ax[0].axhline(y=grid_threshold, color='green', linestyle='--', label='Grid Threshold (kW)')
+    ax[0].axhline(y=grid_threshold, color='red', linestyle='--', label='Grid Threshold (kW)')
 
     ax[0].set_title('Energy Consumption & Net Grid Load')
     ax[0].set_xlabel('Hour')
