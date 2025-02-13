@@ -4,7 +4,6 @@ import datetime
 import matplotlib.pyplot as plt
 import pandas as pd
 
-
 def fetch_spot_prices(date, region):
     year, month, day = date.strftime('%Y'), date.strftime('%m'), date.strftime('%d')
     url = f'https://www.hvakosterstrommen.no/api/v1/prices/{year}/{month}-{day}_{region}.json'
@@ -17,7 +16,6 @@ def fetch_spot_prices(date, region):
         st.error(f"Error fetching spot prices: {e}")
         return None
 
-
 def get_consumption_profile():
     consumption = []
     st.write("Enter your 24-hour consumption profile in kWh (one value per hour):")
@@ -26,20 +24,19 @@ def get_consumption_profile():
         consumption.append(value)
     return consumption
 
-
 def get_user_parameters(highest_hourly_consumption):
     battery_power_options = list(range(100, 2001, 100))
     battery_power = st.selectbox("Select Battery Power (kW):", battery_power_options)
 
-    min_grid_threshold = highest_hourly_consumption - battery_power
+    min_grid_threshold = float(highest_hourly_consumption - battery_power)
     if min_grid_threshold < 0:
-        min_grid_threshold = 0
+        min_grid_threshold = 0.0
 
     grid_threshold = st.number_input(
         "Enter your grid import threshold in kW:",
-        min_value=min_grid_threshold,  # Enforce the minimum value
+        min_value=min_grid_threshold,
         step=0.1,
-        value=min_grid_threshold  # Suggest the min_grid_threshold as default
+        value=min_grid_threshold
     )
 
     if grid_threshold < min_grid_threshold:
@@ -56,68 +53,45 @@ def get_user_parameters(highest_hourly_consumption):
     st.write(f"Battery Capacity: {battery_capacity:.2f} kWh")
 
     battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
-                                         step=0.1, value=90.0) / 100  # Default to 90%
+                                         step=0.1, value=90.0) / 100
     min_soc = st.number_input("Enter your minimum state of charge (in %):", min_value=0.0, max_value=100.0,
-                              step=0.1, value=10.0) / 100  # Default to 10%
+                              step=0.1, value=10.0) / 100
     max_soc = st.number_input("Enter your maximum state of charge (in %):", min_value=0.0, max_value=100.0,
-                              step=0.1, value=90.0) / 100  # Default to 90%
+                              step=0.1, value=90.0) / 100
     return grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc
-
 
 def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
                   min_soc, max_soc, initial_soc=None):
-    if battery_capacity == 0:
-        return [0] * 24, [0] * 24, consumption, 0
 
-    if initial_soc is None:
-        soc = max_soc * battery_capacity
-    else:
-        soc = initial_soc * battery_capacity
 
-    charge_schedule, discharge_schedule, net_grid_load = [0] * 24, [0] * 24, consumption[:]
+    charge_schedule = [0] * 24
+    discharge_schedule = [0] * 24
+    net_grid_load = consumption[:]  # Create a copy to modify
     arbitrage_savings = 0
 
+    # Find the indices of the 3 lowest and 3 highest spot prices
     lowest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x])[:3]
     highest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x], reverse=True)[:3]
 
-    for hour in range(24):
-        # 1. Peak Shaving (highest priority)
-        if net_grid_load[hour] > grid_threshold:
-            excess_load = net_grid_load[hour] - grid_threshold
-            discharge_power = min(excess_load, battery_power, soc * battery_efficiency)
-            discharge_schedule[hour] = discharge_power
-            soc -= discharge_power / battery_efficiency
-            net_grid_load[hour] -= discharge_power
-            net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
+    # Charging logic
+    for hour in lowest_prices_indices:
+        charge_schedule[hour] = battery_power # Charge at full battery power
+        net_grid_load[hour] += battery_power # Increase grid load due to charging
+        arbitrage_savings -= battery_power * spot_prices[hour] # Reduce savings as we buy power
 
-        if hour in lowest_prices_indices and soc < max_soc * battery_capacity:
-            available_import = grid_threshold - net_grid_load[hour]
-            if available_import > 0:
-                charge_power = min(available_import, battery_power,
-                                   (max_soc * battery_capacity - soc) / battery_efficiency)
-                charge_schedule[hour] = charge_power
-                soc += charge_power * battery_efficiency
-                net_grid_load[hour] += charge_power
-                net_grid_load[hour] = min(net_grid_load[hour], grid_threshold)
-
-        if hour in highest_prices_indices and soc > min_soc * battery_capacity:
-            discharge_power = min(battery_power, soc * battery_efficiency, net_grid_load[hour])
-            discharge_schedule[hour] += discharge_power
-            soc -= discharge_power / battery_efficiency
-            net_grid_load[hour] -= discharge_power
-            net_grid_load[hour] = max(net_grid_load[hour], 0)
-
-        arbitrage_savings += discharge_schedule[hour] * spot_prices[hour] - charge_schedule[hour] * spot_prices[hour]
+    # Discharging logic
+    for hour in highest_prices_indices:
+        discharge_schedule[hour] = battery_power # Discharge at full battery power
+        net_grid_load[hour] -= battery_power # Reduce grid load due to discharging
+        arbitrage_savings += battery_power * spot_prices[hour] # Increase savings as we sell power
 
     return charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings
-
 
 def compute_peak_shaving_savings(consumption, grid_threshold):
     highest_hourly_consumption = max(consumption)
     peak_shaving = max(0, highest_hourly_consumption - grid_threshold)
     total_savings = peak_shaving * 104 * 6
     return peak_shaving, total_savings
-
 
 def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     hours = range(24)
@@ -141,7 +115,6 @@ def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
     plt.tight_layout()
     st.pyplot(fig)
 
-
 def fetch_battery_soc(site_id, api_url, api_username, api_password):
     try:
         url = api_url.format(site_id=site_id)
@@ -161,28 +134,24 @@ def fetch_battery_soc(site_id, api_url, api_username, api_password):
         st.error("Response content is not in JSON format.")
         return None
 
-
 def main():
     today = datetime.date.today()
     region = "NO1"
-    spot_prices = fetch_spot_prices(today, region)
-
-    if not spot_prices:
-        st.error("Failed to fetch spot prices. Exiting.")
-        return
 
     st.title("BESS Size Calculator")
     st.sidebar.header("User Inputs")
     data_source = st.sidebar.radio("Choose data entry method:", ("Manual Entry", "Upload CSV"))
 
-    consumption = []
-
     # Date Selection for Monthly Data
     start_date = st.sidebar.date_input("Start Date for Monthly Data", today - datetime.timedelta(days=30))
     end_date = st.sidebar.date_input("End Date for Monthly Data", today)
 
+    date_range = [start_date + datetime.timedelta(days=x) for x in range((end_date - start_date).days + 1)]
+
     monthly_hourly_consumption = {}
     average_top_3_consumption = 0  # Initialize it here
+
+    consumption = []
 
     if data_source == "Manual Entry":
         consumption = get_consumption_profile()
@@ -192,7 +161,7 @@ def main():
             try:
                 df = pd.read_csv(uploaded_file, sep=";", encoding="utf-8-sig", parse_dates=["Fra"], dayfirst=True)
                 df.loc[:, "Hour"] = df["Fra"].dt.hour
-                df['Date'] = df['Fra'].dt.date
+                df['Date'] = df["Fra"].dt.date
 
                 # Aggregate data for the specified date range
                 df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
@@ -275,10 +244,36 @@ def main():
     else:
         initial_soc = max_soc
 
-    charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings = optimize_bess(
-        consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc,
-        max_soc, initial_soc
-    )
+    # Store daily results
+    daily_results = {}
+    total_arbitrage_savings = 0
+    daily_socs = {}
+    current_soc = initial_soc  # Initialize the initial SOC
+
+    # Process each day in the selected date range
+    for current_date in date_range:
+        spot_prices = fetch_spot_prices(current_date, region)
+        if not spot_prices:
+            st.warning(f"Failed to fetch spot prices for {current_date}. Skipping.")
+            continue
+
+        # Call the optimize_bess function for each day
+        charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings = optimize_bess(
+            consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc,
+            max_soc, current_soc
+        )
+
+        daily_results[current_date] = (charge_schedule, discharge_schedule, arbitrage_savings)
+        total_arbitrage_savings += arbitrage_savings
+
+        # Update initial_soc for the next day based on today's schedules
+        final_soc = current_soc * battery_capacity  # Convert SOC fraction to kWh
+        for hour in range(24):
+            final_soc += charge_schedule[hour] * battery_efficiency - discharge_schedule[hour] / battery_efficiency
+
+        final_soc = max(min_soc * battery_capacity, min(final_soc, max_soc * battery_capacity))
+        current_soc = final_soc / battery_capacity
+
 
     peak_shaving, total_savings = compute_peak_shaving_savings(consumption, grid_threshold)
 
@@ -288,13 +283,37 @@ def main():
     st.write(f"Peak Shaving considering the Day with highest hourly consumption: {peak_shaving:.2f} kWh")
     st.write(f"Total Savings from Peak Shaving for 6 months(winter): {total_savings:.2f} NOK")
 
-    st.subheader("Price Arbitrage Optimization")
-    st.write(f"Total Savings from Price Arbitrage: {arbitrage_savings:.2f} NOK")
-    st.write(f"Charging schedule: {[f'{value:.2f}' for value in charge_schedule]}")
-    st.write(f"Discharging schedule: {[f'{value:.2f}' for value in discharge_schedule]}")
+    st.subheader("Monthly Price Arbitrage Optimization")
+    st.write(f"Total Savings from Price Arbitrage for the month: {total_arbitrage_savings:.2f} NOK")
 
-    plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
+    # Date Selection using Selectbox
+    date_options = [date.strftime('%Y-%m-%d') for date in date_range]
+    selected_date_str = st.selectbox("Select a date to view the charge/discharge schedule", date_options)
+    selected_date = datetime.datetime.strptime(selected_date_str, '%Y-%m-%d').date() #Convert the string back to date
 
+    if selected_date:
+        if selected_date in daily_results:
+            charge_schedule, discharge_schedule, daily_arbitrage_savings = daily_results[selected_date]
+
+            # Create a DataFrame for the schedule
+            schedule_data = {'Hour': range(24),
+                             'Charge (kWh)': charge_schedule,
+                             'Discharge (kWh)': discharge_schedule}
+            schedule_df = pd.DataFrame(schedule_data)
+
+            #Add idle state
+            schedule_df['State'] = 'Idle'
+            schedule_df.loc[schedule_df['Charge (kWh)'] > 0, 'State'] = 'Charging'
+            schedule_df.loc[schedule_df['Discharge (kWh)'] > 0, 'State'] = 'Discharging'
+
+            st.subheader(f"Charge/Discharge Schedule for {selected_date}")
+            st.dataframe(schedule_df)
+
+            st.write(f"Daily Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
+        else:
+            st.write("No data available for the selected date.")
+
+        #plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
 
 if __name__ == "__main__":
     main()
