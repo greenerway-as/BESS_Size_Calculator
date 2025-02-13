@@ -36,7 +36,7 @@ def get_user_parameters():
     c_rate = st.selectbox("Select C-Rate:", c_rate_options)
 
 
-    battery_capacity = 21.5 * battery_power / c_rate
+    battery_capacity = (215 * battery_power) / c_rate * 100
     st.write(f"Battery Capacity: {battery_capacity:.2f} kWh")
 
     battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
