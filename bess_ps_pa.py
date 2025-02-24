@@ -11,9 +11,20 @@ def fetch_spot_prices(date, region):
         response = requests.get(url)
         response.raise_for_status()
         prices = response.json()
-        return [entry["NOK_per_kWh"] for entry in prices]
+        # Check if prices is valid and not empty
+        if not isinstance(prices, list) or not prices:
+            st.warning(f"No spot prices found for {date}.")
+            return None
+        spot_prices = [entry["NOK_per_kWh"] for entry in prices]
+        if len(spot_prices) != 24:
+            st.warning(f"Spot prices for {date} does not contain 24 entries.")
+            return None
+        return spot_prices
     except requests.exceptions.RequestException as e:
         st.error(f"Error fetching spot prices: {e}")
+        return None
+    except ValueError as e:
+        st.error(f"Decoding JSON has failed: {e}")
         return None
 
 def get_consumption_profile():
@@ -31,7 +42,6 @@ def get_user_parameters(highest_hourly_consumption):
     min_grid_threshold = float(highest_hourly_consumption - battery_power)
     if min_grid_threshold < 0:
         min_grid_threshold = 0.0
-
     grid_threshold = st.number_input(
         "Enter your grid import threshold in kW:",
         min_value=min_grid_threshold,
@@ -63,11 +73,15 @@ def get_user_parameters(highest_hourly_consumption):
 
 def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
                   min_soc, max_soc, initial_soc=None):
-    # Placeholder logic for BESS optimization (replace with actual implementation)
     charge_schedule = [0] * 24
     discharge_schedule = [0] * 24
     net_grid_load = consumption[:]  # Create a copy to modify
     arbitrage_savings = 0
+
+    # Check if spot_prices has enough data
+    if len(spot_prices) < 3:
+        st.warning("Not enough spot price data to perform optimization.")
+        return charge_schedule, discharge_schedule, net_grid_load, 0  # Return 0 arbitrage savings
 
     # Find the indices of the 3 lowest and 3 highest spot prices
     lowest_prices_indices = sorted(range(24), key=lambda x: spot_prices[x])[:3]
@@ -92,28 +106,6 @@ def compute_peak_shaving_savings(consumption, grid_threshold):
     peak_shaving = max(0, highest_hourly_consumption - grid_threshold)
     total_savings = peak_shaving * 104 * 6
     return peak_shaving, total_savings
-
-def plot_results(consumption, spot_prices, net_grid_load, grid_threshold):
-    hours = range(24)
-
-    fig, ax = plt.subplots(2, 1, figsize=(12, 10))
-    ax[0].bar(hours, consumption, label='Original Consumption (kWh)', color='blue', alpha=0.6)
-    ax[0].bar(hours, net_grid_load, label='Net Grid Load after using BESS (kWh)', color='red', alpha=0.6)
-    ax[0].axhline(y=grid_threshold, color='green', linestyle='--', label='Grid Threshold (kW)')
-
-    ax[0].set_title('Energy Consumption & Net Grid Load')
-    ax[0].set_xlabel('Hour')
-    ax[0].set_ylabel('Energy (kWh)')
-    ax[0].legend()
-
-    ax[1].plot(hours, spot_prices, label='Spot Price (NOK/kWh)', color='orange')
-    ax[1].set_title('Nordic Spot Prices (NO1)')
-    ax[1].set_xlabel('Hour')
-    ax[1].set_ylabel('Price (NOK/kWh)')
-    ax[1].legend()
-
-    plt.tight_layout()
-    st.pyplot(fig)
 
 def fetch_battery_soc(site_id, api_url, api_username, api_password):
     try:
@@ -142,15 +134,14 @@ def main():
     st.sidebar.header("User Inputs")
     data_source = st.sidebar.radio("Choose data entry method:", ("Manual Entry", "Upload CSV"))
 
-    # Date Selection for Monthly Data
+
     start_date = st.sidebar.date_input("Start Date for Monthly Data", today - datetime.timedelta(days=30))
     end_date = st.sidebar.date_input("End Date for Monthly Data", today)
 
     date_range = [start_date + datetime.timedelta(days=x) for x in range((end_date - start_date).days + 1)]
 
     monthly_hourly_consumption = {}
-    average_top_3_consumption = 0  # Initialize it here
-
+    average_top_3_consumption = 0
     consumption = []
 
     if data_source == "Manual Entry":
@@ -163,49 +154,40 @@ def main():
                 df.loc[:, "Hour"] = df["Fra"].dt.hour
                 df['Date'] = df["Fra"].dt.date
 
-                # Aggregate data for the specified date range
                 df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
-                # Determine the correct consumption column name
-                consumption_column = 'KWH 60 Forbruk' if 'KWH 60 Forbruk' in df.columns else 'KWH 15 Forbruk'
 
-                # Ensure the consumption column exists
-                if consumption_column not in df.columns:
-                    st.error(f"The column '{consumption_column}' is not found in the CSV file.")
+                if 'KWH 15 Forbruk' not in df.columns:
+                    st.error("The column 'KWH 15 Forbruk' is not found in the CSV file.")
                     return
 
-                # Group by Date and Hour
-                grouped = df.groupby(['Date', 'Hour'])[consumption_column].apply(
+                grouped = df.groupby(['Date', 'Hour'])['KWH 15 Forbruk'].apply(
                     lambda x: sum(map(float, x.str.replace(",", ".")))
                 ).reset_index()
 
-                # Convert consumption to numeric, handling potential errors
-                grouped[consumption_column] = pd.to_numeric(grouped[consumption_column], errors='coerce')
-                grouped.dropna(subset=[consumption_column], inplace=True)
+                grouped['KWH 15 Forbruk'] = pd.to_numeric(grouped['KWH 15 Forbruk'], errors='coerce')
+                grouped.dropna(subset=['KWH 15 Forbruk'], inplace=True)
 
-                # Aggregate consumption by date and hour
                 for date in grouped['Date'].unique():
                     date_data = grouped[grouped['Date'] == date]
-                    hourly_consumption = date_data.groupby('Hour')[consumption_column].sum().to_dict()
+                    hourly_consumption = date_data.groupby('Hour')['KWH 15 Forbruk'].sum().to_dict()
                     monthly_hourly_consumption[date] = hourly_consumption
 
-                # Find Top 3 Consumption Hours Across All Dates
                 all_consumption_data = []
                 for date, hourly_data in monthly_hourly_consumption.items():
                     for hour, consumption_value in hourly_data.items():
                         all_consumption_data.append((date, hour, consumption_value))
 
-                # Sort by consumption value
                 top_3_consumption = sorted(all_consumption_data, key=lambda x: x[2], reverse=True)[:3]
 
                 st.write("Top 3 Hours with Highest Consumption:")
                 for date, hour, consumption_value in top_3_consumption:
                     st.write(f"Date: {date}, Hour: {hour}, Consumption: {consumption_value:.2f} kWh")
 
-                # Use the date with the highest hourly consumption
-                date_with_highest_consumption = top_3_consumption[0][0]
+               date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
                     grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
-                        consumption_column].sum().tolist()
+                        'KWH 15 Forbruk'].sum().tolist()
+
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
 
                 st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
@@ -246,20 +228,17 @@ def main():
     else:
         initial_soc = max_soc
 
-    # Store daily results
     daily_results = {}
     total_arbitrage_savings = 0
     daily_socs = {}
-    current_soc = initial_soc  # Initialize the initial SOC
+    current_soc = initial_soc
 
-    # Process each day in the selected date range
     for current_date in date_range:
         spot_prices = fetch_spot_prices(current_date, region)
         if not spot_prices:
             st.warning(f"Failed to fetch spot prices for {current_date}. Skipping.")
             continue
 
-        # Call the optimize_bess function for each day
         charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings = optimize_bess(
             consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc,
             max_soc, current_soc
@@ -268,8 +247,8 @@ def main():
         daily_results[current_date] = (charge_schedule, discharge_schedule, arbitrage_savings)
         total_arbitrage_savings += arbitrage_savings
 
-        # Update initial_soc for the next day based on today's schedules
-        final_soc = current_soc * battery_capacity  # Convert SOC fraction to kWh
+        final_soc = current_soc * battery_capacity
+
         for hour in range(24):
             final_soc += charge_schedule[hour] * battery_efficiency - discharge_schedule[hour] / battery_efficiency
 
@@ -288,7 +267,6 @@ def main():
     st.subheader("Monthly Price Arbitrage Optimization")
     st.write(f"Total Savings from Price Arbitrage for the month: {total_arbitrage_savings:.2f} NOK")
 
-    # Date Selection using Selectbox
     date_options = [date.strftime('%Y-%m-%d') for date in date_range]
     selected_date_str = st.selectbox("Select a date to view the charge/discharge schedule", date_options)
     selected_date = datetime.datetime.strptime(selected_date_str, '%Y-%m-%d').date() #Convert the string back to date
@@ -297,13 +275,11 @@ def main():
         if selected_date in daily_results:
             charge_schedule, discharge_schedule, daily_arbitrage_savings = daily_results[selected_date]
 
-            # Create a DataFrame for the schedule
             schedule_data = {'Hour': range(24),
                              'Charge (kWh)': charge_schedule,
                              'Discharge (kWh)': discharge_schedule}
             schedule_df = pd.DataFrame(schedule_data)
 
-            #Add idle state
             schedule_df['State'] = 'Idle'
             schedule_df.loc[schedule_df['Charge (kWh)'] > 0, 'State'] = 'Charging'
             schedule_df.loc[schedule_df['Discharge (kWh)'] > 0, 'State'] = 'Discharging'
@@ -311,11 +287,9 @@ def main():
             st.subheader(f"Charge/Discharge Schedule for {selected_date}")
             st.dataframe(schedule_df)
 
-            st.write(f"Daily Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
+           st.write(f"{selected_date.strftime('%d/%m/%Y')}'s Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
         else:
             st.write("No data available for the selected date.")
-
-        #plot_results(consumption, spot_prices, net_grid_load, grid_threshold)
 
 if __name__ == "__main__":
     main()
