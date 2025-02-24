@@ -42,6 +42,7 @@ def get_user_parameters(highest_hourly_consumption):
     min_grid_threshold = float(highest_hourly_consumption - battery_power)
     if min_grid_threshold < 0:
         min_grid_threshold = 0.0
+
     grid_threshold = st.number_input(
         "Enter your grid import threshold in kW:",
         min_value=min_grid_threshold,
@@ -60,7 +61,6 @@ def get_user_parameters(highest_hourly_consumption):
         battery_capacity = battery_power
     else:
         battery_capacity = 2.15 * battery_power
-
     st.write(f"Battery Capacity: {battery_capacity:.2f} kWh")
 
     battery_efficiency = st.number_input("Enter your battery efficiency (in %):", min_value=50.0, max_value=100.0,
@@ -73,6 +73,7 @@ def get_user_parameters(highest_hourly_consumption):
 
 def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
                   min_soc, max_soc, initial_soc=None):
+
     charge_schedule = [0] * 24
     discharge_schedule = [0] * 24
     net_grid_load = consumption[:]  # Create a copy to modify
@@ -133,8 +134,6 @@ def main():
     st.title("BESS Size Calculator")
     st.sidebar.header("User Inputs")
     data_source = st.sidebar.radio("Choose data entry method:", ("Manual Entry", "Upload CSV"))
-
-
     start_date = st.sidebar.date_input("Start Date for Monthly Data", today - datetime.timedelta(days=30))
     end_date = st.sidebar.date_input("End Date for Monthly Data", today)
 
@@ -142,6 +141,7 @@ def main():
 
     monthly_hourly_consumption = {}
     average_top_3_consumption = 0
+
     consumption = []
 
     if data_source == "Manual Entry":
@@ -156,20 +156,25 @@ def main():
 
                 df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
 
-                if 'KWH 15 Forbruk' not in df.columns:
-                    st.error("The column 'KWH 15 Forbruk' is not found in the CSV file.")
+                # Determine if 'KWH 60 Forbruk' or 'KWH 15 Forbruk' is present
+                if 'KWH 60 Forbruk' in df.columns:
+                    consumption_column = 'KWH 60 Forbruk'
+                elif 'KWH 15 Forbruk' in df.columns:
+                    consumption_column = 'KWH 15 Forbruk'
+                else:
+                    st.error("Neither 'KWH 60 Forbruk' nor 'KWH 15 Forbruk' found in the CSV file.")
                     return
 
-                grouped = df.groupby(['Date', 'Hour'])['KWH 15 Forbruk'].apply(
+                grouped = df.groupby(['Date', 'Hour'])[consumption_column].apply(
                     lambda x: sum(map(float, x.str.replace(",", ".")))
                 ).reset_index()
 
-                grouped['KWH 15 Forbruk'] = pd.to_numeric(grouped['KWH 15 Forbruk'], errors='coerce')
-                grouped.dropna(subset=['KWH 15 Forbruk'], inplace=True)
+                grouped[consumption_column] = pd.to_numeric(grouped[consumption_column], errors='coerce')
+                grouped.dropna(subset=[consumption_column], inplace=True)
 
                 for date in grouped['Date'].unique():
                     date_data = grouped[grouped['Date'] == date]
-                    hourly_consumption = date_data.groupby('Hour')['KWH 15 Forbruk'].sum().to_dict()
+                    hourly_consumption = date_data.groupby('Hour')[consumption_column].sum().to_dict()
                     monthly_hourly_consumption[date] = hourly_consumption
 
                 all_consumption_data = []
@@ -183,11 +188,10 @@ def main():
                 for date, hour, consumption_value in top_3_consumption:
                     st.write(f"Date: {date}, Hour: {hour}, Consumption: {consumption_value:.2f} kWh")
 
-               date_with_highest_consumption = top_3_consumption[0][0]
+                date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
                     grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
-                        'KWH 15 Forbruk'].sum().tolist()
-
+                        consumption_column].sum().tolist()
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
 
                 st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
@@ -232,7 +236,6 @@ def main():
     total_arbitrage_savings = 0
     daily_socs = {}
     current_soc = initial_soc
-
     for current_date in date_range:
         spot_prices = fetch_spot_prices(current_date, region)
         if not spot_prices:
@@ -248,7 +251,6 @@ def main():
         total_arbitrage_savings += arbitrage_savings
 
         final_soc = current_soc * battery_capacity
-
         for hour in range(24):
             final_soc += charge_schedule[hour] * battery_efficiency - discharge_schedule[hour] / battery_efficiency
 
@@ -287,9 +289,10 @@ def main():
             st.subheader(f"Charge/Discharge Schedule for {selected_date}")
             st.dataframe(schedule_df)
 
-           st.write(f"{selected_date.strftime('%d/%m/%Y')}'s Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
+            st.write(f"{selected_date.strftime('%d/%m/%Y')}'s Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
         else:
             st.write("No data available for the selected date.")
+
 
 if __name__ == "__main__":
     main()
