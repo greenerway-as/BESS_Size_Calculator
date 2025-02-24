@@ -286,7 +286,7 @@ def main():
             st.subheader(f"Charge/Discharge Schedule for {selected_date}")
             st.dataframe(schedule_df)
 
-            st.write(f"Daily Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
+            st.write(f"{selected_date.strftime('%d/%m/%Y')}'s Arbitrage Savings: {daily_arbitrage_savings:.2f} NOK")
         else:
             st.write("No data available for the selected date.")
 
