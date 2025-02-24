@@ -134,8 +134,6 @@ def main():
     st.title("BESS Size Calculator")
     st.sidebar.header("User Inputs")
     data_source = st.sidebar.radio("Choose data entry method:", ("Manual Entry", "Upload CSV"))
-
-
     start_date = st.sidebar.date_input("Start Date for Monthly Data", today - datetime.timedelta(days=30))
     end_date = st.sidebar.date_input("End Date for Monthly Data", today)
 
@@ -158,20 +156,25 @@ def main():
 
                 df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
 
-                if 'KWH 15 Forbruk' not in df.columns:
-                    st.error("The column 'KWH 15 Forbruk' is not found in the CSV file.")
+                # Determine if 'KWH 60 Forbruk' or 'KWH 15 Forbruk' is present
+                if 'KWH 60 Forbruk' in df.columns:
+                    consumption_column = 'KWH 60 Forbruk'
+                elif 'KWH 15 Forbruk' in df.columns:
+                    consumption_column = 'KWH 15 Forbruk'
+                else:
+                    st.error("Neither 'KWH 60 Forbruk' nor 'KWH 15 Forbruk' found in the CSV file.")
                     return
 
-                grouped = df.groupby(['Date', 'Hour'])['KWH 15 Forbruk'].apply(
+                grouped = df.groupby(['Date', 'Hour'])[consumption_column].apply(
                     lambda x: sum(map(float, x.str.replace(",", ".")))
                 ).reset_index()
 
-                grouped['KWH 15 Forbruk'] = pd.to_numeric(grouped['KWH 15 Forbruk'], errors='coerce')
-                grouped.dropna(subset=['KWH 15 Forbruk'], inplace=True)
+                grouped[consumption_column] = pd.to_numeric(grouped[consumption_column], errors='coerce')
+                grouped.dropna(subset=[consumption_column], inplace=True)
 
                 for date in grouped['Date'].unique():
                     date_data = grouped[grouped['Date'] == date]
-                    hourly_consumption = date_data.groupby('Hour')['KWH 15 Forbruk'].sum().to_dict()
+                    hourly_consumption = date_data.groupby('Hour')[consumption_column].sum().to_dict()
                     monthly_hourly_consumption[date] = hourly_consumption
 
                 all_consumption_data = []
@@ -188,7 +191,7 @@ def main():
                 date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
                     grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
-                        'KWH 15 Forbruk'].sum().tolist()
+                        consumption_column].sum().tolist()
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
 
                 st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")

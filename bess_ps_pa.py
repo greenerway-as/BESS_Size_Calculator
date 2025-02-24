@@ -63,8 +63,7 @@ def get_user_parameters(highest_hourly_consumption):
 
 def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, battery_capacity, battery_efficiency,
                   min_soc, max_soc, initial_soc=None):
-
-
+    # Placeholder logic for BESS optimization (replace with actual implementation)
     charge_schedule = [0] * 24
     discharge_schedule = [0] * 24
     net_grid_load = consumption[:]  # Create a copy to modify
@@ -166,25 +165,27 @@ def main():
 
                 # Aggregate data for the specified date range
                 df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+                # Determine the correct consumption column name
+                consumption_column = 'KWH 60 Forbruk' if 'KWH 60 Forbruk' in df.columns else 'KWH 15 Forbruk'
 
-                # Ensure 'KWH 15 Forbruk' column exists
-                if 'KWH 15 Forbruk' not in df.columns:
-                    st.error("The column 'KWH 15 Forbruk' is not found in the CSV file.")
+                # Ensure the consumption column exists
+                if consumption_column not in df.columns:
+                    st.error(f"The column '{consumption_column}' is not found in the CSV file.")
                     return
 
                 # Group by Date and Hour
-                grouped = df.groupby(['Date', 'Hour'])['KWH 15 Forbruk'].apply(
+                grouped = df.groupby(['Date', 'Hour'])[consumption_column].apply(
                     lambda x: sum(map(float, x.str.replace(",", ".")))
                 ).reset_index()
 
                 # Convert consumption to numeric, handling potential errors
-                grouped['KWH 15 Forbruk'] = pd.to_numeric(grouped['KWH 15 Forbruk'], errors='coerce')
-                grouped.dropna(subset=['KWH 15 Forbruk'], inplace=True)
+                grouped[consumption_column] = pd.to_numeric(grouped[consumption_column], errors='coerce')
+                grouped.dropna(subset=[consumption_column], inplace=True)
 
                 # Aggregate consumption by date and hour
                 for date in grouped['Date'].unique():
                     date_data = grouped[grouped['Date'] == date]
-                    hourly_consumption = date_data.groupby('Hour')['KWH 15 Forbruk'].sum().to_dict()
+                    hourly_consumption = date_data.groupby('Hour')[consumption_column].sum().to_dict()
                     monthly_hourly_consumption[date] = hourly_consumption
 
                 # Find Top 3 Consumption Hours Across All Dates
@@ -204,7 +205,7 @@ def main():
                 date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
                     grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
-                        'KWH 15 Forbruk'].sum().tolist()
+                        consumption_column].sum().tolist()
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
 
                 st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
