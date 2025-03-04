@@ -1,9 +1,10 @@
-import streamlit as st
-import requests
 import datetime
-import matplotlib.pyplot as plt
-import pandas as pd
+
 import altair as alt
+import pandas as pd
+import requests
+import streamlit as st
+
 
 def fetch_spot_prices(date, region):
     year, month, day = date.strftime('%Y'), date.strftime('%m'), date.strftime('%d')
@@ -128,6 +129,89 @@ def fetch_battery_soc(site_id, api_url, api_username, api_password):
         st.error("Response content is not in JSON format.")
         return None
 
+def optimize_combined_peak_arbitrage(consumption, spot_prices, grid_threshold, battery_power,
+                                     battery_capacity, battery_efficiency, min_soc, max_soc, initial_soc):
+    soc = initial_soc * battery_capacity
+    charge_schedule = [0] * 24
+    discharge_schedule = [0] * 24
+    net_grid_load = consumption.copy()
+    arbitrage_savings = 0
+
+    # Step 1: Identify peak hours and total energy needed for peak shaving
+    peak_hours = sorted([h for h, cons in enumerate(consumption) if cons > grid_threshold])
+    peak_shaving_requirement = {h: consumption[h] - grid_threshold for h in peak_hours}
+    total_peak_shaving_needed = sum(peak_shaving_requirement.values()) / battery_efficiency
+
+    # Step 2: Charge before peaks to ensure enough capacity for peak shaving
+    non_peak_hours = [(h, spot_prices[h]) for h in range(24) if h not in peak_hours]
+    non_peak_hours.sort(key=lambda x: x[1])  # Sort by lowest price first
+
+    for hour, price in non_peak_hours:
+        if soc < max_soc * battery_capacity:
+            charge_needed = min(
+                battery_power,
+                (max_soc * battery_capacity - soc) / battery_efficiency
+            )
+            charge_schedule[hour] = charge_needed
+            net_grid_load[hour] += charge_needed
+            soc += charge_needed * battery_efficiency
+            arbitrage_savings -= charge_needed * price
+
+        if soc >= max_soc * battery_capacity:
+            break
+
+            # Step 3: Discharge at peak hours to ensure net_grid_load ≤ grid_threshold
+    for hour in peak_hours:
+        discharge_needed = peak_shaving_requirement[hour]
+        discharge_possible = min(discharge_needed, (soc - min_soc * battery_capacity) * battery_efficiency, battery_power)
+
+        if discharge_possible > 0:
+            discharge_schedule[hour] = discharge_possible
+            net_grid_load[hour] -= discharge_possible
+            soc -= discharge_possible / battery_efficiency
+            arbitrage_savings += discharge_possible * spot_prices[hour]
+
+    # Step 4: Arbitrage with remaining capacity
+    remaining_hours = [(h, spot_prices[h]) for h in range(24) if charge_schedule[h] == 0 and discharge_schedule[h] == 0]
+    remaining_hours.sort(key=lambda x: x[1])  # Sort by price
+
+    for hour, price in remaining_hours:
+        if price < sum(spot_prices) / len(spot_prices):  # Charge if price is below average
+            charge_possible = min(
+                battery_power,
+                (max_soc * battery_capacity - soc) / battery_efficiency,
+                grid_threshold - net_grid_load[hour]
+            )
+            if charge_possible > 0:
+                charge_schedule[hour] = charge_possible
+                net_grid_load[hour] += charge_possible
+                soc += charge_possible * battery_efficiency
+                arbitrage_savings -= charge_possible * price
+        else:  # Discharge if price is above average
+            discharge_possible = min(
+                battery_power,
+                (soc - min_soc * battery_capacity) * battery_efficiency,
+                net_grid_load[hour] - min(net_grid_load[hour], grid_threshold)
+            )
+            if discharge_possible > 0:
+                discharge_schedule[hour] = discharge_possible
+                net_grid_load[hour] -= discharge_possible
+                soc -= discharge_possible / battery_efficiency
+                arbitrage_savings += discharge_possible * price
+
+    # Final check to ensure all hours are below grid threshold
+    for hour in range(24):
+        if net_grid_load[hour] > grid_threshold:
+            excess = net_grid_load[hour] - grid_threshold
+            if soc > min_soc * battery_capacity:
+                discharge_possible = min(excess, (soc - min_soc * battery_capacity) * battery_efficiency, battery_power)
+                discharge_schedule[hour] += discharge_possible
+                net_grid_load[hour] -= discharge_possible
+                soc -= discharge_possible / battery_efficiency
+                arbitrage_savings += discharge_possible * spot_prices[hour]
+
+    return charge_schedule, discharge_schedule, net_grid_load, arbitrage_savings, soc / battery_capacity
+
 def main():
     today = datetime.date.today()
     region = "NO1"
@@ -224,6 +308,12 @@ def main():
         tooltip=['Hour', 'Consumption (kWh)']
     ).properties(
         title='24-Hour Consumption Profile'
+    ).configure_axis(
+        labelAngle=0,
+        grid=True,
+        titlePadding=10
+    ).configure_view(
+        strokeWidth=0
     )
 
     st.altair_chart(chart, use_container_width=True)
@@ -324,6 +414,7 @@ def main():
             # Ensure 'Type' is treated as a categorical variable
             chart_data['Type'] = chart_data['Type'].astype(str)
 
+            # Altair chart with labels, tooltips, and cleaner boundaries
             chart = alt.Chart(chart_data).mark_bar().encode(
                 x=alt.X('Hour:O', title='Hour'),
                 y=alt.Y('kWh:Q', title='kWh'),
@@ -331,6 +422,12 @@ def main():
                 tooltip=['Hour', 'Type', 'kWh']
             ).properties(
                 title=f"Charge/Discharge Schedule for {selected_date}"
+            ).configure_axis(
+                labelAngle=0,
+                grid=True,
+                titlePadding=10
+            ).configure_view(
+                strokeWidth=0
             )
 
             st.altair_chart(chart, use_container_width=True)
@@ -351,12 +448,117 @@ def main():
                     tooltip=['Hour', 'Spot Price (NOK/kWh)']
                 ).properties(
                     title=f'Spot Prices for {selected_date}'
+                ).configure_axis(
+                    labelAngle=0,
+                    grid=True,
+                    titlePadding=10
+                ).configure_view(
+                    strokeWidth=0
                 )
 
                 st.altair_chart(spot_price_chart, use_container_width=True)
 
         else:
             st.write("No data available for the selected date.")
+
+        st.subheader("Combined Peak Shaving and Price Arbitrage Optimization")
+
+        daily_combined_results = {}
+        total_combined_savings = 0
+        current_soc = initial_soc
+
+        for current_date in date_range:
+            spot_prices = fetch_spot_prices(current_date, region)
+            if not spot_prices:
+                continue
+
+            results = optimize_combined_peak_arbitrage(
+                consumption, spot_prices, grid_threshold, battery_power, battery_capacity,
+                battery_efficiency, min_soc, max_soc, current_soc
+            )
+
+            if results is None:
+                continue
+
+            charge_schedule, discharge_schedule, net_grid_load, combined_savings, final_soc = results
+            daily_combined_results[current_date] = (
+            charge_schedule, discharge_schedule, net_grid_load, combined_savings)
+            total_combined_savings += combined_savings
+            current_soc = final_soc
+
+        st.write(f"Total Savings from Combined Peak Shaving and Price Arbitrage: {total_combined_savings:.2f} NOK")
+
+        # Visualization for selected date
+        selected_date_combined_str = st.selectbox(
+            "Select a date to view combined peak shaving and arbitrage schedule",
+            date_options,
+            key="combined_date_select"
+        )
+        selected_date_combined = datetime.datetime.strptime(selected_date_combined_str, '%Y-%m-%d').date()
+
+        if selected_date_combined in daily_combined_results:
+            charge_schedule, discharge_schedule, net_grid_load, daily_combined_savings = daily_combined_results[
+                selected_date_combined]
+
+            # Schedule DataFrame
+            combined_df = pd.DataFrame({
+                'Hour': range(24),
+                'Consumption': consumption,
+                'Charge (kWh)': charge_schedule,
+                'Discharge (kWh)': discharge_schedule,
+                'Net Grid Load': net_grid_load
+            })
+
+            st.subheader(f"Combined Schedule for {selected_date_combined}")
+            st.dataframe(combined_df)
+
+            # Combined visualization
+            chart_data = pd.DataFrame({
+                'Hour': range(24),
+                'Consumption': consumption,
+                'Net Grid Load': net_grid_load,
+                'Charge': charge_schedule,
+                'Discharge': discharge_schedule
+            })
+
+            base = alt.Chart(chart_data).encode(x=alt.X('Hour:O', title='Hour'))
+
+            line1 = base.mark_line(color='blue').encode(
+                y=alt.Y('Consumption:Q', title='kWh'),
+                tooltip=['Hour', 'Consumption']
+            )
+
+            line2 = base.mark_line(color='green').encode(
+                y=alt.Y('Net Grid Load:Q'),
+                tooltip=['Hour', 'Net Grid Load']
+            )
+
+            bar = base.mark_bar(opacity=0.7).encode(
+                y=alt.Y('Charge:Q', stack=None),
+                y2=alt.Y2('Discharge:Q'),
+                color=alt.condition(
+                    alt.datum.Charge > 0,
+                    alt.value('green'),
+                    alt.value('red')
+                ),
+                tooltip=['Hour', 'Charge', 'Discharge']
+            )
+
+            threshold_line = alt.Chart(pd.DataFrame({'y': [grid_threshold]})).mark_rule(color='red').encode(y='y')
+
+            combined_chart = alt.layer(line1, line2, bar, threshold_line).properties(
+                title=f'Combined Peak Shaving and Arbitrage for {selected_date_combined}'
+            ).configure_axis(
+                labelAngle=0,
+                grid=True,
+                titlePadding=10
+            ).configure_view(
+                strokeWidth=0
+            )
+
+            st.altair_chart(combined_chart, use_container_width=True)
+
+            st.write(f"Daily Combined Savings for {selected_date_combined}: {daily_combined_savings:.2f} NOK")
 
 if __name__ == "__main__":
     main()
