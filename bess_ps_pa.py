@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
+@st.cache_data
 def fetch_spot_prices(date, region):
     year, month, day = date.strftime('%Y'), date.strftime('%m'), date.strftime('%d')
     url = f'https://www.hvakosterstrommen.no/api/v1/prices/{year}/{month}-{day}_{region}.json'
