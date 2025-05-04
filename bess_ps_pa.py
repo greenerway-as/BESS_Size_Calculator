@@ -267,20 +267,18 @@ def main():
                     for hour, consumption_value in hourly_data.items():
                         all_consumption_data.append((date, hour, consumption_value))
 
+
                 top_3_consumption = sorted(all_consumption_data, key=lambda x: x[2], reverse=True)[:3]
 
-                st.write("Top 3 Hours with Highest Consumption:")
-                for date, hour, consumption_value in top_3_consumption:
-                    st.write(f"Date: {date}, Hour: {hour}, Consumption: {consumption_value:.2f} kWh")
+
+
 
                 date_with_highest_consumption = top_3_consumption[0][0]
                 hourly_consumption_highest_date = \
                     grouped[grouped['Date'] == date_with_highest_consumption].groupby('Hour')[
                         consumption_column].sum().tolist()
                 consumption = [round(value, 2) for value in hourly_consumption_highest_date]
-                st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
-                st.write("Hourly consumption:")
-                st.write(consumption)
+
                 average_top_3_consumption = sum(x[2] for x in top_3_consumption) / len(
                     top_3_consumption) if top_3_consumption else 0
 
@@ -296,6 +294,19 @@ def main():
 
     # Calculate highest hourly consumption
     highest_hourly_consumption = max(consumption)
+
+    grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters(
+        highest_hourly_consumption)
+
+
+    st.write("")
+    st.write("")
+    st.write("**Top 3 Hours with Highest Consumption:**")
+    for date, hour, consumption_value in top_3_consumption:
+        st.write(f"Date: {date}, Hour: {hour}, Consumption: {consumption_value:.2f} kWh")
+    st.write(f"Data for {date_with_highest_consumption} (highest consumption date) loaded successfully!")
+    st.write("Hourly consumption:")
+    st.write(consumption)
 
     # Consumption Profile Visualization
     hours = list(range(1, len(consumption) + 1))
@@ -318,7 +329,7 @@ def main():
 
     st.altair_chart(chart, use_container_width=True)
 
-    grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters(highest_hourly_consumption)
+    #grid_threshold, battery_power, battery_capacity, battery_efficiency, min_soc, max_soc = get_user_parameters(highest_hourly_consumption)
 
     site_id = st.sidebar.text_input("Enter Site ID:")
     api_url = "https://ems.greenerway.services/api/v1/sites/{site_id}/measurements/realtime"
