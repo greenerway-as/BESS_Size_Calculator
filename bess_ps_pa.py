@@ -560,5 +560,13 @@ def main():
 
             st.write(f"Daily Combined Savings for {selected_date_combined}: {daily_combined_savings:.2f} NOK")
 
+    with st.sidebar.expander("Savings Summary", expanded=True):
+        st.sidebar.markdown("## 💰 Savings Summary")
+        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(winter)**: {total_savings:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(summer)**: {total_savings * 44 / 104:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Price Arbitrage for the month**: {total_arbitrage_savings:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Combined Peak Shaving and Price Arbitrage**: {total_combined_savings:.2f} NOK")
+
+
 if __name__ == "__main__":
     main()
