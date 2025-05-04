@@ -5,7 +5,7 @@ import pandas as pd
 import requests
 import streamlit as st
 
-
+@st.cache_data
 def fetch_spot_prices(date, region):
     year, month, day = date.strftime('%Y'), date.strftime('%m'), date.strftime('%d')
     url = f'https://www.hvakosterstrommen.no/api/v1/prices/{year}/{month}-{day}_{region}.json'
@@ -559,6 +559,14 @@ def main():
             st.altair_chart(combined_chart, use_container_width=True)
 
             st.write(f"Daily Combined Savings for {selected_date_combined}: {daily_combined_savings:.2f} NOK")
+
+    with st.sidebar.expander("Savings Summary", expanded=True):
+        st.sidebar.markdown("## 💰 Savings Summary")
+        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(winter)**: {total_savings:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(summer)**: {total_savings * 44 / 104:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Price Arbitrage for the month**: {total_arbitrage_savings:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Combined Peak Shaving and Price Arbitrage**: {total_combined_savings:.2f} NOK")
+
 
 if __name__ == "__main__":
     main()
