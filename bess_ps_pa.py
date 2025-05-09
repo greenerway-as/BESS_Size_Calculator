@@ -107,7 +107,7 @@ def optimize_bess(consumption, spot_prices, grid_threshold, battery_power, batte
 def compute_peak_shaving_savings(consumption, grid_threshold):
     highest_hourly_consumption = max(consumption)
     peak_shaving = max(0, highest_hourly_consumption - grid_threshold)
-    total_savings = peak_shaving * 104 * 6
+    total_savings = peak_shaving * 74 * 6
     return peak_shaving, total_savings
 
 def fetch_battery_soc(site_id, api_url, api_username, api_password):
@@ -493,8 +493,17 @@ def main():
 
             charge_schedule, discharge_schedule, net_grid_load, combined_savings, final_soc = results
             daily_combined_results[current_date] = (
-            charge_schedule, discharge_schedule, net_grid_load, combined_savings)
-            total_combined_savings += combined_savings
+                charge_schedule, discharge_schedule, net_grid_load, combined_savings)
+
+            # Check if the month is winter (October to March) or summer (April to September)
+            is_winter = current_date.month in [10, 11, 12, 1, 2, 3]
+            if is_winter:
+                # Winter: Add total_savings/180 for the day
+                total_combined_savings += combined_savings + (total_savings / 180)
+            else:
+                # Summer: Add total_savings * 31/74 / 180 for the day
+                total_combined_savings += combined_savings + ((total_savings * 31 / 74) / 180)
+
             current_soc = final_soc
 
         st.write(f"Total Savings from Combined Peak Shaving and Price Arbitrage: {total_combined_savings:.2f} NOK")
@@ -510,6 +519,9 @@ def main():
         if selected_date_combined in daily_combined_results:
             charge_schedule, discharge_schedule, net_grid_load, daily_combined_savings = daily_combined_results[
                 selected_date_combined]
+
+            # Adjust daily_combined_savings to include total_combined_savings / 180
+            adjusted_daily_combined_savings = daily_combined_savings + (total_combined_savings / 180)
 
             # Schedule DataFrame
             combined_df = pd.DataFrame({
@@ -569,12 +581,12 @@ def main():
 
             st.altair_chart(combined_chart, use_container_width=True)
 
-            st.write(f"Daily Combined Savings for {selected_date_combined}: {daily_combined_savings:.2f} NOK")
+            st.write(f"Daily Combined Savings for {selected_date_combined}: {adjusted_daily_combined_savings:.2f} NOK")
 
     with st.sidebar.expander("Savings Summary", expanded=True):
         st.sidebar.markdown("## 💰 Savings Summary")
         st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(winter)**: {total_savings:.2f} NOK")
-        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(summer)**: {total_savings * 44 / 104:.2f} NOK")
+        st.sidebar.markdown(f"**Total Savings from Peak Shaving for 6 months(summer)**: {total_savings * 31 / 74:.2f} NOK")
         st.sidebar.markdown(f"**Total Savings from Price Arbitrage for the month**: {total_arbitrage_savings:.2f} NOK")
         st.sidebar.markdown(f"**Total Savings from Combined Peak Shaving and Price Arbitrage**: {total_combined_savings:.2f} NOK")
 
